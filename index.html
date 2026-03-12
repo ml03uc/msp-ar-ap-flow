@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MSP & Accounting — AR/AP Flow</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; }
+    body { background: #0f1117; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0f1117; }
+    ::-webkit-scrollbar-thumb { background: #1e2535; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── DATA ────────────────────────────────────────────────────────────────────
+
+const NODES = {
+  customer: {
+    id: "customer", label: "Customer", icon: "👤", color: "#60a5fa",
+    x: 50, y: 8,
+    desc: "End client receiving managed IT services. Receives invoices, makes payments, and interacts primarily through the MSP portal or email.",
+    tools: ["Client Portal", "Email / PDF Invoice", "ACH / Credit Card"],
+    role: "AR Origin",
+  },
+  psa: {
+    id: "psa", label: "PSA", icon: "🛠", color: "#a78bfa",
+    x: 50, y: 33,
+    desc: "Professional Services Automation — the operational heart of an MSP. Tracks time, tickets, contracts, and SLAs, then generates billable invoices.",
+    tools: ["ConnectWise Manage", "Autotask (Datto)", "HaloPSA", "Syncro"],
+    role: "Service & Billing Engine",
+  },
+  accounting: {
+    id: "accounting", label: "Accounting / ERP", icon: "📒", color: "#34d399",
+    x: 18, y: 60,
+    desc: "General ledger, chart of accounts, and financial reporting hub. Syncs invoices from PSA, posts payments, manages AP bills, and produces P&L / balance sheet.",
+    tools: ["QuickBooks Online", "Xero", "Sage Intacct", "NetSuite ERP"],
+    role: "Financial System of Record",
+  },
+  payment: {
+    id: "payment", label: "Payment Provider", icon: "💳", color: "#fb923c",
+    x: 82, y: 60,
+    desc: "Processes both inbound customer payments (AR) and outbound vendor payments (AP). Handles ACH, credit cards, and surcharge pass-through.",
+    tools: ["Alternative Payments", "Stripe", "Bill.com", "Melio"],
+    role: "Payment Rails",
+  },
+  vendor: {
+    id: "vendor", label: "Vendor / Supplier", icon: "🏭", color: "#f472b6",
+    x: 18, y: 87,
+    desc: "Software vendors, hardware distributors, and subcontractors. Send bills that flow into AP. Common in MSP stacks: Microsoft, Ingram Micro, TD SYNNEX.",
+    tools: ["Microsoft CSP", "Ingram Micro", "TD SYNNEX", "Subcontractors"],
+    role: "AP Origin",
+  },
+  bank: {
+    id: "bank", label: "Bank / Treasury", icon: "🏦", color: "#fbbf24",
+    x: 82, y: 87,
+    desc: "Final settlement layer. Receives collected AR funds and disburses AP payments. Reconciliation closes the loop between the payment provider and the GL.",
+    tools: ["Business Checking", "ACH Settlement", "Wire Transfers", "Bank Reconciliation"],
+    role: "Cash Settlement",
+  },
+};
+
+const FLOWS = [
+  { id:"f1",  from:"customer",    to:"psa",        label:"Service Request / PO",           color:"#60a5fa", type:"ar", step:1, detail:"Customer opens a ticket or signs a contract. Work is tracked in the PSA against SLA." },
+  { id:"f2",  from:"psa",         to:"accounting",  label:"Invoice Sync",                   color:"#a78bfa", type:"ar", step:2, detail:"PSA auto-syncs approved invoices to the accounting system via native integration (e.g., ConnectWise → QBO)." },
+  { id:"f3",  from:"accounting",  to:"payment",     label:"Payment Link / ACH Request",     color:"#34d399", type:"ar", step:3, detail:"Accounting triggers a payment request or sends a pay-now link via the payment provider." },
+  { id:"f4",  from:"customer",    to:"payment",     label:"Card / ACH Payment",             color:"#fb923c", type:"ar", step:4, detail:"Customer pays via card or ACH. Surcharge is optionally passed through per card-brand rules." },
+  { id:"f5",  from:"payment",     to:"accounting",  label:"Payment Posted + Reconciled",    color:"#fb923c", type:"ar", step:5, detail:"Payment provider posts the collected amount back to the GL, closing the AR invoice." },
+  { id:"f6",  from:"payment",     to:"bank",        label:"AR Settlement",                  color:"#fbbf24", type:"ar", step:6, detail:"Net funds (less processing fees) settle to the business bank account, usually T+1 or T+2." },
+  { id:"f7",  from:"vendor",      to:"accounting",  label:"Vendor Bill / PO",               color:"#f472b6", type:"ap", step:1, detail:"Vendor sends an invoice (email, EDI, or portal). AP team enters or auto-captures the bill into the accounting system." },
+  { id:"f8",  from:"accounting",  to:"payment",     label:"Bill Pay Approval",              color:"#34d399", type:"ap", step:2, detail:"Approved bills are pushed to the payment provider for scheduling." },
+  { id:"f9",  from:"payment",     to:"vendor",      label:"ACH / Check / Card",             color:"#fb923c", type:"ap", step:3, detail:"Payment is disbursed to the vendor via ACH, virtual card, or check on the scheduled date." },
+  { id:"f10", from:"bank",        to:"payment",     label:"AP Funding Source",              color:"#fbbf24", type:"ap", step:4, detail:"Bank account is debited to fund the AP disbursement. The GL is updated, closing the AP bill." },
+];
+
+const PERSONAS = [
+  { id:"msp",  label:"MSP",              emoji:"🖥", desc:"Managed Service Provider — sells recurring IT services. AR-heavy with monthly flat-fee + T&M invoicing. PSA is mission-critical." },
+  { id:"acct", label:"Accounting Firm",  emoji:"📊", desc:"CPA / Bookkeeping firm — bills hourly or fixed-fee. Often uses the same stack but heavier on AP management and client-facing reconciliation." },
+];
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function nodePos(node, w, h) { return { x: (node.x / 100) * w, y: (node.y / 100) * h }; }
+
+// ─── ANIMATED DOT ────────────────────────────────────────────────────────────
+
+function FlowDot({ x1, y1, x2, y2, cpx, cpy, color, delay, active }) {
+  const [t, setT] = useState(0);
+  const rafRef = useRef();
+  const startRef = useRef(null);
+  const DURATION = 2000;
+
+  useEffect(() => {
+    if (!active) { setT(0); startRef.current = null; return; }
+    const animate = (ts) => {
+      if (!startRef.current) startRef.current = ts - (delay || 0);
+      const elapsed = Math.max(0, (ts - startRef.current)) % DURATION;
+      setT(elapsed / DURATION);
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [active, delay]);
+
+  if (!active) return null;
+  // Quadratic bezier point
+  const mt = t;
+  const cx = (1-mt)*(1-mt)*x1 + 2*(1-mt)*mt*cpx + mt*mt*x2;
+  const cy = (1-mt)*(1-mt)*y1 + 2*(1-mt)*mt*cpy + mt*mt*y2;
+  const opacity = t < 0.1 ? t/0.1 : t > 0.9 ? (1-t)/0.1 : 1;
+  return <circle cx={cx} cy={cy} r={5} fill={color} opacity={opacity} />;
+}
+
+// ─── MAIN ────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [activeTab, setActiveTab]       = useState("ar");
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [hoveredFlow, setHoveredFlow]   = useState(null);
+  const [persona, setPersona]           = useState("msp");
+  const [animStep, setAnimStep]         = useState(null);
+  const [svgSize, setSvgSize]           = useState({ w: 700, h: 500 });
+  const [panelOpen, setPanelOpen]       = useState(true);
+  const containerRef = useRef();
+  const animRef = useRef();
+
+  useEffect(() => {
+    const obs = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        setSvgSize({ w: Math.max(width, 300), h: Math.max(height, 380) });
+      }
+    });
+    if (containerRef.current) obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const visibleFlows = FLOWS.filter(f => activeTab === "all" ? true : f.type === activeTab);
+  const { w, h } = svgSize;
+  const NODE_R = Math.max(24, Math.min(34, w / 22));
+
+  const playSteps = useCallback(() => {
+    clearInterval(animRef.current);
+    const maxStep = Math.max(...visibleFlows.map(f => f.step));
+    let s = 1;
+    setAnimStep(s);
+    animRef.current = setInterval(() => {
+      s++;
+      if (s > maxStep) { clearInterval(animRef.current); setTimeout(() => setAnimStep(null), 800); return; }
+      setAnimStep(s);
+    }, 1300);
+  }, [visibleFlows]);
+
+  useEffect(() => () => clearInterval(animRef.current), []);
+
+  const activeFlows = animStep ? visibleFlows.filter(f => f.step <= animStep) : visibleFlows;
+
+  const PANEL_W = panelOpen ? 270 : 0;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"#0f1117", color:"#e2e8f0" }}>
+
+      {/* ── Header ── */}
+      <div style={{ padding:"14px 20px 10px", borderBottom:"1px solid #1e2535", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <div>
+            <h1 style={{ fontSize:18, fontWeight:700, color:"#f8fafc", letterSpacing:"-0.3px" }}>
+              MSP &amp; Accounting Tech Stack
+            </h1>
+            <p style={{ fontSize:12, color:"#64748b", marginTop:2 }}>
+              Interactive AR/AP Flow — click nodes &amp; connections to explore
+            </p>
+          </div>
+          <div style={{ marginLeft:"auto", display:"flex", gap:6, flexWrap:"wrap" }}>
+            {PERSONAS.map(p => (
+              <button key={p.id} onClick={() => setPersona(p.id)} style={{
+                padding:"4px 13px", borderRadius:20, border:"1px solid", fontSize:12,
+                cursor:"pointer", fontWeight:600, transition:"all .2s",
+                background: persona===p.id ? "#1e40af" : "transparent",
+                borderColor: persona===p.id ? "#3b82f6" : "#334155",
+                color: persona===p.id ? "#93c5fd" : "#94a3b8"
+              }}>{p.emoji} {p.label}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginTop:8, padding:"7px 12px", background:"#1e293b", borderRadius:8,
+          fontSize:12, color:"#94a3b8", borderLeft:"3px solid #3b82f6" }}>
+          {PERSONAS.find(p => p.id === persona)?.desc}
+        </div>
+
+        <div style={{ display:"flex", gap:8, marginTop:10, alignItems:"center", flexWrap:"wrap" }}>
+          {[["ar","💰 AR Flow","#60a5fa"],["ap","📤 AP Flow","#f472b6"],["all","🔄 Full View","#a78bfa"]].map(([id,lbl,col]) => (
+            <button key={id} onClick={() => { setActiveTab(id); setAnimStep(null); }} style={{
+              padding:"5px 14px", borderRadius:20, border:"1px solid", fontSize:13,
+              cursor:"pointer", fontWeight:600, transition:"all .2s",
+              background: activeTab===id ? `${col}22` : "transparent",
+              borderColor: activeTab===id ? col : "#334155",
+              color: activeTab===id ? col : "#64748b"
+            }}>{lbl}</button>
+          ))}
+          <button onClick={playSteps} style={{
+            padding:"5px 14px", borderRadius:20, border:"1px solid #334155",
+            fontSize:13, cursor:"pointer", background:"#1e293b", color:"#94a3b8"
+          }}>▶ Animate</button>
+          <button onClick={() => setPanelOpen(v => !v)} style={{
+            marginLeft:"auto", padding:"5px 14px", borderRadius:20, border:"1px solid #334155",
+            fontSize:12, cursor:"pointer", background:"#1e293b", color:"#94a3b8"
+          }}>{panelOpen ? "Hide Panel →" : "← Show Panel"}</button>
+        </div>
+      </div>
+
+      {/* ── Body ── */}
+      <div style={{ display:"flex", flex:1, overflow:"hidden", minHeight:0 }}>
+
+        {/* SVG Canvas */}
+        <div ref={containerRef} style={{ flex:1, position:"relative", minHeight:0 }}>
+          <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`} style={{ display:"block" }}>
+            <defs>
+              {Object.values(NODES).map(node => (
+                <radialGradient key={node.id} id={`grad-${node.id}`} cx="50%" cy="50%" r="50%">
+                  <stop offset="0%"   stopColor={node.color} stopOpacity="0.3" />
+                  <stop offset="100%" stopColor={node.color} stopOpacity="0.03" />
+                </radialGradient>
+              ))}
+              <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <filter id="glow2"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              {FLOWS.map(f => (
+                <marker key={f.id} id={`arr-${f.id}`} markerWidth="7" markerHeight="7" refX="5" refY="2.5" orient="auto">
+                  <path d="M0,0 L0,5 L7,2.5 z" fill={f.color} opacity={0.85} />
+                </marker>
+              ))}
+            </defs>
+
+            {/* Grid */}
+            <defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M40 0L0 0 0 40" fill="none" stroke="#1a2030" strokeWidth="0.5"/>
+            </pattern></defs>
+            <rect width={w} height={h} fill="url(#grid)" />
+
+            {/* Flows */}
+            {visibleFlows.map(flow => {
+              const from = NODES[flow.from];
+              const to   = NODES[flow.to];
+              const p1   = nodePos(from, w, h);
+              const p2   = nodePos(to,   w, h);
+              const isActive  = activeFlows.includes(flow);
+              const isHovered = hoveredFlow === flow.id;
+              const opacity   = animStep ? (isActive ? 1 : 0.12) : 1;
+
+              // Control point for bezier
+              const cpx = (p1.x + p2.x) / 2;
+              const cpy = (p1.y + p2.y) / 2 - Math.abs(p2.x - p1.x) * 0.18 - 25;
+              const path = `M ${p1.x} ${p1.y} Q ${cpx} ${cpy} ${p2.x} ${p2.y}`;
+              const midT = 0.5;
+              const tx = (1-midT)*(1-midT)*p1.x + 2*(1-midT)*midT*cpx + midT*midT*p2.x;
+              const ty = (1-midT)*(1-midT)*p1.y + 2*(1-midT)*midT*cpy + midT*midT*p2.y - 10;
+
+              return (
+                <g key={flow.id} opacity={opacity} style={{ transition:"opacity 0.4s", cursor:"pointer" }}
+                  onMouseEnter={() => setHoveredFlow(flow.id)}
+                  onMouseLeave={() => setHoveredFlow(null)}
+                  onClick={() => setHoveredFlow(isHovered ? null : flow.id)}>
+                  <path d={path} fill="none" stroke="transparent" strokeWidth={18} />
+                  {(isHovered || isActive) && <path d={path} fill="none" stroke={flow.color} strokeWidth={5} opacity={0.2} filter="url(#glow)" />}
+                  <path d={path} fill="none" stroke={flow.color}
+                    strokeWidth={isHovered ? 2.5 : 1.8}
+                    strokeDasharray={flow.type==="ap" ? "7 4" : "none"}
+                    markerEnd={`url(#arr-${flow.id})`}
+                    opacity={isHovered ? 1 : 0.55} />
+                  {isHovered && (
+                    <>
+                      <rect x={tx-105} y={ty-36} width={210} height={50} rx={6}
+                        fill="#1e293b" stroke={flow.color} strokeWidth={1} opacity={0.97}/>
+                      <text x={tx} y={ty-18} textAnchor="middle" fontSize={10} fill={flow.color} fontWeight={700}>{flow.label}</text>
+                      <foreignObject x={tx-100} y={ty-12} width={200} height={36}>
+                        <div xmlns="http://www.w3.org/1999/xhtml"
+                          style={{fontSize:10, color:"#94a3b8", lineHeight:"1.4", wordBreak:"break-word"}}>
+                          {flow.detail}
+                        </div>
+                      </foreignObject>
+                    </>
+                  )}
+                  <FlowDot x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
+                    cpx={cpx} cpy={cpy}
+                    color={flow.color} delay={flow.step * 250} active={isActive} />
+                </g>
+              );
+            })}
+
+            {/* Nodes */}
+            {Object.values(NODES).map(node => {
+              const p          = nodePos(node, w, h);
+              const isSelected = selectedNode?.id === node.id;
+              return (
+                <g key={node.id} style={{ cursor:"pointer" }}
+                  onClick={() => { setSelectedNode(isSelected ? null : node); if (!panelOpen) setPanelOpen(true); }}>
+                  <circle cx={p.x} cy={p.y} r={NODE_R+20} fill={`url(#grad-${node.id})`} opacity={0.8}/>
+                  {isSelected && (
+                    <circle cx={p.x} cy={p.y} r={NODE_R+7} fill="none"
+                      stroke={node.color} strokeWidth={1.5} opacity={0.4}>
+                      <animate attributeName="r" values={`${NODE_R+5};${NODE_R+16};${NODE_R+5}`} dur="2s" repeatCount="indefinite"/>
+                      <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite"/>
+                    </circle>
+                  )}
+                  <circle cx={p.x} cy={p.y} r={NODE_R+3} fill="none"
+                    stroke={node.color} strokeWidth={isSelected ? 2 : 1}
+                    opacity={isSelected ? 0.9 : 0.3}/>
+                  <circle cx={p.x} cy={p.y} r={NODE_R}
+                    fill={isSelected ? `${node.color}28` : "#111827"}
+                    stroke={node.color} strokeWidth={1.5}
+                    filter={isSelected ? "url(#glow)" : undefined}/>
+                  <text x={p.x} y={p.y+2} textAnchor="middle" dominantBaseline="middle"
+                    fontSize={NODE_R*0.68} style={{ userSelect:"none", pointerEvents:"none" }}>
+                    {node.icon}
+                  </text>
+                  <text x={p.x} y={p.y+NODE_R+13} textAnchor="middle"
+                    fontSize={11} fill={node.color} fontWeight={700}
+                    style={{ userSelect:"none", pointerEvents:"none" }}>
+                    {node.label}
+                  </text>
+                  <text x={p.x} y={p.y+NODE_R+24} textAnchor="middle"
+                    fontSize={9} fill="#4b5563" style={{ userSelect:"none", pointerEvents:"none" }}>
+                    {node.role}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          {animStep && (
+            <div style={{ position:"absolute", bottom:16, left:"50%", transform:"translateX(-50%)",
+              background:"#1e293b", border:"1px solid #334155", borderRadius:20,
+              padding:"5px 16px", fontSize:12, color:"#94a3b8" }}>
+              Step {animStep} / {Math.max(...visibleFlows.map(f => f.step))}
+            </div>
+          )}
+        </div>
+
+        {/* Right Panel */}
+        {panelOpen && (
+          <div style={{ width:PANEL_W, borderLeft:"1px solid #1e2535", overflowY:"auto",
+            padding:14, flexShrink:0, transition:"width .3s" }}>
+            {selectedNode
+              ? <NodeDetail node={selectedNode} onClose={() => setSelectedNode(null)} />
+              : <FlowLegend flows={visibleFlows} activeTab={activeTab} onHover={setHoveredFlow} />}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ borderTop:"1px solid #1e2535", padding:"8px 20px", fontSize:11,
+        color:"#334155", display:"flex", gap:16, flexShrink:0 }}>
+        <span>— Solid = AR (inbound)</span>
+        <span>- - - Dashed = AP (outbound)</span>
+        <span>● Dots = data in motion</span>
+        <span style={{ marginLeft:"auto" }}>Click nodes &amp; lines to explore</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── NODE DETAIL ─────────────────────────────────────────────────────────────
+
+function NodeDetail({ node, onClose }) {
+  const arFlows = FLOWS.filter(f => f.type==="ar" && (f.from===node.id || f.to===node.id));
+  const apFlows = FLOWS.filter(f => f.type==="ap" && (f.from===node.id || f.to===node.id));
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+        <span style={{ fontSize:26 }}>{node.icon}</span>
+        <div>
+          <div style={{ fontWeight:700, fontSize:15, color:node.color }}>{node.label}</div>
+          <div style={{ fontSize:11, color:"#64748b" }}>{node.role}</div>
+        </div>
+        <button onClick={onClose} style={{ marginLeft:"auto", background:"none", border:"none",
+          color:"#64748b", cursor:"pointer", fontSize:20, lineHeight:1 }}>×</button>
+      </div>
+      <p style={{ fontSize:12, color:"#94a3b8", lineHeight:1.65, marginBottom:14 }}>{node.desc}</p>
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+          letterSpacing:1, marginBottom:7 }}>Common Tools</div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+          {node.tools.map(t => (
+            <span key={t} style={{ background:`${node.color}18`, border:`1px solid ${node.color}44`,
+              color:node.color, borderRadius:12, padding:"2px 9px", fontSize:11, fontWeight:600 }}>{t}</span>
+          ))}
+        </div>
+      </div>
+      {arFlows.length > 0 && <FlowSection title="AR Connections" flows={arFlows} nodeId={node.id} />}
+      {apFlows.length > 0 && <FlowSection title="AP Connections" flows={apFlows} nodeId={node.id} />}
+    </div>
+  );
+}
+
+function FlowSection({ title, flows, nodeId }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+        letterSpacing:1, marginBottom:7 }}>{title}</div>
+      {flows.map(f => (
+        <div key={f.id} style={{ background:"#1e293b", borderRadius:7, padding:"7px 9px",
+          marginBottom:5, borderLeft:`3px solid ${f.color}` }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"#e2e8f0", marginBottom:3 }}>
+            {f.from===nodeId ? `→ ${NODES[f.to].label}` : `← ${NODES[f.from].label}`}
+            <span style={{ marginLeft:6, fontSize:10, color:f.color,
+              background:`${f.color}22`, borderRadius:8, padding:"1px 6px" }}>{f.label}</span>
+          </div>
+          <div style={{ fontSize:10, color:"#64748b", lineHeight:1.5 }}>{f.detail}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── FLOW LEGEND ─────────────────────────────────────────────────────────────
+
+function FlowLegend({ flows, activeTab, onHover }) {
+  const steps = [...new Set(flows.map(f => f.step))].sort((a,b) => a-b);
+  return (
+    <div>
+      <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+        letterSpacing:1, marginBottom:10 }}>
+        {activeTab==="ar" ? "💰 AR Flow Steps" : activeTab==="ap" ? "📤 AP Flow Steps" : "🔄 All Steps"}
+      </div>
+      <p style={{ fontSize:11, color:"#64748b", marginBottom:14, lineHeight:1.5 }}>
+        {activeTab==="ar"
+          ? "How an MSP collects money from customers — ticket to cash."
+          : activeTab==="ap"
+          ? "How an MSP pays vendors — bill receipt to settlement."
+          : "Full AR + AP cycle. Hover connections or click a node."}
+      </p>
+      {steps.map(step => {
+        const sf = flows.filter(f => f.step===step);
+        return (
+          <div key={step} style={{ marginBottom:10 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}>
+              <div style={{ width:20, height:20, borderRadius:"50%", background:"#1e3a8a",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:10, fontWeight:700, color:"#93c5fd", flexShrink:0 }}>{step}</div>
+              <div style={{ fontSize:12, fontWeight:600, color:"#cbd5e1" }}>
+                {sf.map(f => f.label).join(" / ")}
+              </div>
+            </div>
+            {sf.map(f => (
+              <div key={f.id} style={{ background:"#1e293b", borderRadius:6, padding:"6px 9px",
+                marginBottom:4, borderLeft:`3px solid ${f.color}`, cursor:"pointer" }}
+                onMouseEnter={() => onHover(f.id)}
+                onMouseLeave={() => onHover(null)}>
+                <div style={{ fontSize:10, color:f.color, fontWeight:600, marginBottom:2 }}>
+                  {NODES[f.from].icon} → {NODES[f.to].icon} {NODES[f.from].label} → {NODES[f.to].label}
+                </div>
+                <div style={{ fontSize:10, color:"#64748b", lineHeight:1.4 }}>{f.detail}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+      <div style={{ marginTop:14, padding:"10px 11px", background:"#0f172a",
+        borderRadius:8, border:"1px solid #1e2535" }}>
+        <div style={{ fontSize:10, fontWeight:700, color:"#475569", marginBottom:6 }}>💡 Tip</div>
+        <div style={{ fontSize:11, color:"#64748b", lineHeight:1.5 }}>
+          Click any node on the map to see the tools used and all data flows in &amp; out.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── RENDER ──────────────────────────────────────────────────────────────────
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
