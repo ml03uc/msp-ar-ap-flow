@@ -145,10 +145,10 @@ const FLOWS_BY_PERSONA = {
       cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.5,  cpy: p2.y + (p2.y-p1.y)*0.4}),
       detail:"Payment disbursed to the vendor via ACH, virtual card, or check on the scheduled date." },
 
-    { id:"f12", from:"bank",       to:"payment",
-      label:"AP Funding Source",         color:"#fbbf24", type:"ap", step:5,
-      cpFn:(p1,p2)=>({cpx: p2.x,         cpy: p1.y - (p1.y-p2.y)*0.5}),
-      detail:"Bank account is debited to fund the AP disbursement. GL updated, closing the AP bill." },
+    { id:"f12", from:"bank",       to:"firm",
+      label:"AP Debit / Reconciliation", color:"#fbbf24", type:"ap", step:5,
+      cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.3,  cpy: p1.y - (p1.y-p2.y)*0.6}),
+      detail:"The Firm's bank account is debited to fund the AP disbursement. The GL is updated, closing the vendor bill and completing the AP cycle." },
   ],
   acct:[] // filled below by copying msp flows with updated labels
 };
