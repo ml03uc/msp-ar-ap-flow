@@ -72,6 +72,9 @@ const BASE_NODES = {
   bank:      { id:"bank",       label:"Bank / Treasury",  icon:"🏦", color:"#fbbf24", x:86, y:88,
     desc:"Final settlement layer. Receives AR funds and disburses AP payments. Reconciliation closes the loop between payment provider and GL.",
     tools:["Business Checking","ACH Settlement","Wire Transfers","Bank Reconciliation"], role:"Cash Settlement" },
+  firm:      { id:"firm",       label:"The Firm",          icon:"🏢", color:"#94a3b8", x:50, y:72,
+    desc:"The central business entity — the MSP or Accounting Firm. Receives vendor invoices, reviews and approves them, then routes payment through the accounting system and payment provider.",
+    tools:["Finance / AP Team","Controller","Management Approval"], role:"Business Entity" },
 };
 
 // ─── FLOWS ────────────────────────────────────────────────────────────────────
@@ -122,23 +125,28 @@ const FLOWS_BY_PERSONA = {
       detail:"Net funds settle to the business bank account, typically T+1 for ACH, T+2 for card." },
 
     // AP ───────────────────────────────────────────────────────────────────────
-    { id:"f9",  from:"vendor",     to:"accounting",
-      label:"Vendor Bill / PO",          color:"#f472b6", type:"ap", step:1,
-      cpFn:(p1,p2)=>({cpx: p1.x,         cpy: p1.y - (p1.y-p2.y)*0.5}),
-      detail:"Vendor sends an invoice via email, EDI, or portal. AP team enters or auto-captures the bill into the accounting system." },
+    { id:"f9",  from:"vendor",     to:"firm",
+      label:"Vendor Invoice",            color:"#f472b6", type:"ap", step:1,
+      cpFn:(p1,p2)=>({cpx: p1.x + (p2.x-p1.x)*0.2,  cpy: p1.y - (p1.y-p2.y)*0.65}),
+      detail:"Vendor sends an invoice to the business via email, EDI, or portal. The AP team receives and reviews it before recording in the accounting system." },
+
+    { id:"f9b", from:"firm",       to:"accounting",
+      label:"Bill Entry & Approval",     color:"#94a3b8", type:"ap", step:2,
+      cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.45, cpy: p1.y - 52}),
+      detail:"The business reviews and approves the vendor bill, then enters it into the accounting system for scheduling and payment." },
 
     { id:"f10", from:"accounting", to:"payment",
-      label:"Bill Pay Approval",         color:"#34d399", type:"ap", step:2,
+      label:"Bill Pay Approval",         color:"#34d399", type:"ap", step:3,
       cpFn:(p1,p2)=>({cpx: p1.x + (p2.x-p1.x)*0.5,  cpy: p1.y - (p2.y-p1.y)*0.55}),
-      detail:"Approved bills are pushed to the payment provider for scheduling and disbursement." },
+      detail:"Approved bills are pushed from the accounting system to the payment provider for scheduling and disbursement." },
 
     { id:"f11", from:"payment",    to:"vendor",
-      label:"ACH / Check / Virtual Card",color:"#fb923c", type:"ap", step:3,
+      label:"ACH / Check / Virtual Card",color:"#fb923c", type:"ap", step:4,
       cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.5,  cpy: p2.y + (p2.y-p1.y)*0.4}),
       detail:"Payment disbursed to the vendor via ACH, virtual card, or check on the scheduled date." },
 
     { id:"f12", from:"bank",       to:"payment",
-      label:"AP Funding Source",         color:"#fbbf24", type:"ap", step:4,
+      label:"AP Funding Source",         color:"#fbbf24", type:"ap", step:5,
       cpFn:(p1,p2)=>({cpx: p2.x,         cpy: p1.y - (p1.y-p2.y)*0.5}),
       detail:"Bank account is debited to fund the AP disbursement. GL updated, closing the AP bill." },
   ],
@@ -152,7 +160,8 @@ const ACCT_OVERRIDES = {
   f3:{ label:"Payment Request Trigger", detail:"PM tool triggers a payment request directly through the payment provider — e.g., Karbon + Alternative Payments sends the client a pay-now link tied to the engagement." },
   f4:{ label:"Invoice Payment Link",    detail:"For larger invoices, accounting sends a formal payment link or ACH request via the payment provider." },
   f6:{ label:"Payment Confirmed",       detail:"Payment confirmation syncs back to the PM tool, closing the billing milestone and notifying the team." },
-  f9:{ label:"Supplier Bill",           detail:"Software subscriptions, contractors, and office expenses are captured as vendor bills in the accounting system." },
+  f9:{ label:"Supplier Invoice",        detail:"Software subscriptions, contractors, and office expenses arrive as invoices. The practice reviews before entering into the accounting system." },
+  f9b:{ label:"Bill Entry & Review",   detail:"The practice enters and approves the supplier bill in the accounting system before scheduling payment." },
 };
 FLOWS_BY_PERSONA.acct = FLOWS_BY_PERSONA.msp.map(f => ({
   ...f, ...(ACCT_OVERRIDES[f.id] || {}),
