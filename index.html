@@ -70,8 +70,8 @@ const BASE_NODES = {
     desc:"Software vendors, hardware distributors, and subcontractors. Send bills that flow into AP. Examples: Microsoft CSP, Ingram Micro, TD SYNNEX.",
     tools:["Microsoft CSP","Ingram Micro","TD SYNNEX","Subcontractors"], role:"AP Origin" },
   bank:      { id:"bank",       label:"Bank / Treasury",  icon:"🏦", color:"#fbbf24", x:86, y:88,
-    desc:"Final settlement layer. Receives AR funds and disburses AP payments. Reconciliation closes the loop between payment provider and GL.",
-    tools:["Business Checking","ACH Settlement","Wire Transfers","Bank Reconciliation"], role:"Cash Settlement" },
+    desc:"The Firm's bank account — the ultimate source and destination of cash. AR funds settle here from the payment provider. For AP, the payment provider debits this account to fund vendor disbursements.",
+    tools:["Business Checking","ACH Settlement","Wire Transfers","Bank Reconciliation"], role:"The Firm's Treasury" },
   firm:      { id:"firm",       label:"The Firm",          icon:"🏢", color:"#94a3b8", x:50, y:72,
     desc:"The central business entity — the MSP or Accounting Firm. Receives vendor invoices, reviews and approves them, then routes payment through the accounting system and payment provider.",
     tools:["Finance / AP Team","Controller","Management Approval"], role:"Business Entity" },
@@ -145,10 +145,10 @@ const FLOWS_BY_PERSONA = {
       cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.5,  cpy: p2.y + (p2.y-p1.y)*0.4}),
       detail:"Payment disbursed to the vendor via ACH, virtual card, or check on the scheduled date." },
 
-    { id:"f12", from:"bank",       to:"firm",
-      label:"AP Debit / Reconciliation", color:"#fbbf24", type:"ap", step:5,
-      cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.3,  cpy: p1.y - (p1.y-p2.y)*0.6}),
-      detail:"The Firm's bank account is debited to fund the AP disbursement. The GL is updated, closing the vendor bill and completing the AP cycle." },
+    { id:"f12", from:"bank",       to:"payment",
+      label:"AP Bank Debit",             color:"#fbbf24", type:"ap", step:5,
+      cpFn:(p1,p2)=>({cpx: p2.x,         cpy: p1.y - (p1.y-p2.y)*0.5}),
+      detail:"The payment provider debits The Firm's bank account to fund the vendor disbursement. The GL is updated in the accounting system, closing the AP bill." },
   ],
   acct:[] // filled below by copying msp flows with updated labels
 };
