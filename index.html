@@ -8,323 +8,312 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body, #root { height: 100%; width: 100%; }
-    body { background: #0f1117; font-family: 'Inter','Segoe UI',system-ui,sans-serif; }
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: #0f1117; }
-    ::-webkit-scrollbar-thumb { background: #1e2535; border-radius: 3px; }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body,#root{height:100%;width:100%}
+    body{background:#0f1117;font-family:'Inter','Segoe UI',system-ui,sans-serif}
+    ::-webkit-scrollbar{width:6px}
+    ::-webkit-scrollbar-track{background:#0f1117}
+    ::-webkit-scrollbar-thumb{background:#1e2535;border-radius:3px}
   </style>
 </head>
-<body>
-<div id="root"></div>
+<body><div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
-// ─── PERSONA-AWARE PSA NODE ───────────────────────────────────────────────────
+// ─── CANVAS PADDING ───────────────────────────────────────────────────────────
+// All node positions are computed inside a padded region so nothing ever clips.
+const PAD_X = 90;   // px from left/right edge
+const PAD_Y = 40;   // px from top/bottom edge
 
+// Nodes use 0–100 percentages; nodePos maps them into the padded area.
+function nodePos(node, w, h) {
+  return {
+    x: PAD_X + (node.x / 100) * (w - 2 * PAD_X),
+    y: PAD_Y + (node.y / 100) * (h - 2 * PAD_Y),
+  };
+}
+
+function bezierPt(a, cp, b, t) {
+  return (1 - t) * (1 - t) * a + 2 * (1 - t) * t * cp + t * t * b;
+}
+
+// ─── NODES ────────────────────────────────────────────────────────────────────
+// x/y are % within the padded area (0=left-pad edge, 100=right-pad edge)
 const PSA_BY_PERSONA = {
   msp: {
-    id:"psa", label:"PSA", icon:"🛠", color:"#a78bfa",
-    x:50, y:30,
-    desc:"Professional Services Automation — the operational core of an MSP. Tracks tickets, time, contracts, and SLAs. Generates invoices and triggers payment collection directly through integrated payment providers.",
+    id:"psa", label:"PSA", icon:"🛠", color:"#a78bfa", x:50, y:28,
+    desc:"Professional Services Automation — tracks tickets, contracts, time, and SLAs. Generates invoices and triggers billing directly through the payment provider for recurring contracts.",
     tools:["ConnectWise Manage","Autotask (Datto)","HaloPSA","Syncro"],
     role:"Service & Billing Engine",
-    paymentNote:"PSA triggers auto-billing for recurring contracts and syncs payment confirmations back to close tickets automatically — eliminating manual reconciliation.",
+    paymentNote:"PSA triggers auto-billing for recurring contracts and receives payment confirmations to close tickets — no manual reconciliation needed.",
   },
   acct: {
-    id:"psa", label:"Project Management", icon:"📋", color:"#a78bfa",
-    x:50, y:30,
-    desc:"Practice management and workflow tool — tracks client engagements, deadlines, staff capacity, and billable time. Triggers payment requests and syncs confirmations when clients pay.",
+    id:"psa", label:"Project Mgmt", icon:"📋", color:"#a78bfa", x:50, y:28,
+    desc:"Practice management tool — tracks client engagements, deadlines, staff capacity, and billable time. Triggers payment requests and syncs confirmations when clients pay.",
     tools:["Karbon","Financial Cents","Jetpack Workflow","ClickUp / Asana"],
     role:"Practice & Workflow Engine",
-    paymentNote:"PM tool triggers client payment requests directly through the payment provider. Confirmation syncs back to close billing milestones.",
+    paymentNote:"PM tool triggers client payment requests directly through the payment provider. Confirmations sync back to close billing milestones.",
   },
 };
 
 const BASE_NODES = {
-  customer:  { id:"customer",  label:"Customer",          icon:"👤", color:"#60a5fa", x:50,  y:8,  desc:"End client receiving managed IT or accounting services. Receives invoices, pays via ACH or card, and may interact through a client portal.",                                        tools:["Client Portal","Email / PDF Invoice","ACH / Credit Card"],                  role:"AR Origin" },
-  accounting:{ id:"accounting",label:"Accounting / ERP",  icon:"📒", color:"#34d399", x:16,  y:62, desc:"General ledger, chart of accounts, and financial reporting hub. Syncs invoices from PSA or PM tool, posts payments, manages AP bills, and produces P&L / balance sheet.",   tools:["QuickBooks Online","Xero","Sage Intacct","NetSuite ERP"],                     role:"Financial Record" },
-  payment:   { id:"payment",   label:"Payment Provider",  icon:"💳", color:"#fb923c", x:84,  y:62, desc:"Processes inbound customer payments (AR) and outbound vendor payments (AP). Connects directly to the PSA/PM tool for auto-billing and confirmation syncs — not just the accounting system.", tools:["Alternative Payments","Stripe","Bill.com","Melio"],                  role:"Payment Rails" },
-  vendor:    { id:"vendor",    label:"Vendor / Supplier", icon:"🏭", color:"#f472b6", x:16,  y:88, desc:"Software vendors, hardware distributors, and subcontractors. Send bills that flow into AP.",                                                                                     tools:["Microsoft CSP","Ingram Micro","TD SYNNEX","Subcontractors"],                  role:"AP Origin" },
-  bank:      { id:"bank",      label:"Bank / Treasury",   icon:"🏦", color:"#fbbf24", x:84,  y:88, desc:"Final settlement layer. Receives collected AR funds and disburses AP payments. Reconciliation closes the loop between the payment provider and the GL.",                          tools:["Business Checking","ACH Settlement","Wire Transfers","Bank Reconciliation"],  role:"Cash Settlement" },
+  customer:  { id:"customer",   label:"Customer",         icon:"👤", color:"#60a5fa", x:50, y:5,
+    desc:"End client receiving managed IT or accounting services. Receives invoices, pays via ACH or card, interacts through a client portal or email.",
+    tools:["Client Portal","Email / PDF Invoice","ACH / Credit Card"], role:"AR Origin" },
+  accounting:{ id:"accounting", label:"Accounting / ERP", icon:"📒", color:"#34d399", x:14, y:60,
+    desc:"General ledger and financial reporting hub. Syncs invoices from PSA/PM, posts payments, manages AP bills, and produces P&L and balance sheet.",
+    tools:["QuickBooks Online","Xero","Sage Intacct","NetSuite ERP"], role:"Financial Record" },
+  payment:   { id:"payment",    label:"Payment Provider", icon:"💳", color:"#fb923c", x:86, y:60,
+    desc:"Processes AR (inbound from customers) and AP (outbound to vendors). Connects directly to the PSA/PM tool for auto-billing triggers and confirmation syncs — not just through accounting.",
+    tools:["Alternative Payments","Stripe","Bill.com","Melio"], role:"Payment Rails" },
+  vendor:    { id:"vendor",     label:"Vendor / Supplier",icon:"🏭", color:"#f472b6", x:14, y:88,
+    desc:"Software vendors, hardware distributors, and subcontractors. Send bills that flow into AP. Examples: Microsoft CSP, Ingram Micro, TD SYNNEX.",
+    tools:["Microsoft CSP","Ingram Micro","TD SYNNEX","Subcontractors"], role:"AP Origin" },
+  bank:      { id:"bank",       label:"Bank / Treasury",  icon:"🏦", color:"#fbbf24", x:86, y:88,
+    desc:"Final settlement layer. Receives AR funds and disburses AP payments. Reconciliation closes the loop between payment provider and GL.",
+    tools:["Business Checking","ACH Settlement","Wire Transfers","Bank Reconciliation"], role:"Cash Settlement" },
 };
 
-// ─── FLOWS  ──────────────────────────────────────────────────────────────────
-// cpFn: explicit bezier control-point function (p1,p2,w,h) => {cpx,cpy}
-// This keeps each curve from tangling with others.
+// ─── FLOWS ────────────────────────────────────────────────────────────────────
+// cpFn receives already-padded (p1, p2) pixel positions plus (w, h).
+// Express control points as arithmetic on p1/p2 so they scale with the layout.
 
 const FLOWS_BY_PERSONA = {
   msp:[
-    // ── AR ──
-    { id:"f1",  from:"customer",   to:"psa",        label:"Service Request / PO",              color:"#60a5fa", type:"ar", step:1,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
+    // AR ───────────────────────────────────────────────────────────────────────
+    { id:"f1", from:"customer",   to:"psa",
+      label:"Service Request",           color:"#60a5fa", type:"ar", step:1,
+      cpFn:(p1,p2)=>({cpx: p1.x,         cpy: p1.y + (p2.y-p1.y)*0.5}),
       detail:"Customer opens a ticket or signs a managed services contract. Work is tracked in the PSA against the agreed SLA." },
 
-    { id:"f2",  from:"psa",        to:"accounting",  label:"Invoice Sync",                      color:"#a78bfa", type:"ar", step:2,
-      cpFn:(p1,p2)=>({ cpx:p1.x-60,                cpy:(p1.y+p2.y)/2+10 }),
+    { id:"f2", from:"psa",        to:"accounting",
+      label:"Invoice Sync",              color:"#a78bfa", type:"ar", step:2,
+      cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.3,  cpy: p1.y + (p2.y-p1.y)*0.4}),
       detail:"PSA auto-syncs approved invoices to the accounting system via native integration (e.g., ConnectWise → QBO, HaloPSA → Xero)." },
 
-    { id:"f3",  from:"psa",        to:"payment",     label:"Auto-billing / Recurring Charge",   color:"#a78bfa", type:"ar", step:3, highlight:true,
-      cpFn:(p1,p2)=>({ cpx:p2.x+55,                cpy:p1.y-20 }),
-      detail:"For recurring contracts, the PSA triggers billing directly through the payment provider — e.g., ConnectWise + Alternative Payments auto-charges the customer's saved card or ACH on contract renewal. No manual invoice step needed." },
+    { id:"f3", from:"psa",        to:"payment",
+      label:"Auto-billing Trigger",      color:"#a78bfa", type:"ar", step:3, highlight:true,
+      cpFn:(p1,p2)=>({cpx: p1.x + (p2.x-p1.x)*0.6,  cpy: p1.y - (p2.y-p1.y)*0.55}),
+      detail:"For recurring contracts the PSA triggers billing directly through the payment provider — auto-charges the saved card or ACH at renewal. No manual invoice step needed." },
 
-    { id:"f4",  from:"accounting", to:"payment",     label:"One-Time Payment Link",             color:"#34d399", type:"ar", step:4,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p2.y+45 }),
+    { id:"f4", from:"accounting", to:"payment",
+      label:"One-Time Payment Link",     color:"#34d399", type:"ar", step:4,
+      cpFn:(p1,p2)=>({cpx: p1.x + (p2.x-p1.x)*0.5,  cpy: p2.y + (p2.y-p1.y)*0.45}),
       detail:"For T&M or project invoices, accounting sends a payment link or ACH request via the payment provider to the customer." },
 
-    { id:"f5",  from:"customer",   to:"payment",     label:"Card / ACH Payment",                color:"#fb923c", type:"ar", step:5,
-      cpFn:(p1,p2)=>({ cpx:p2.x+60,                cpy:p1.y+10 }),
-      detail:"Customer pays via card or ACH. Surcharge is optionally passed through per card-brand rules. Funds are captured by the payment provider." },
+    { id:"f5", from:"customer",   to:"payment",
+      label:"Card / ACH Payment",        color:"#fb923c", type:"ar", step:5,
+      cpFn:(p1,p2)=>({cpx: p2.x + (p2.x-p1.x)*0.25, cpy: p1.y + (p2.y-p1.y)*0.15}),
+      detail:"Customer pays via card or ACH. Surcharge is optionally passed through per card-brand rules." },
 
-    { id:"f6",  from:"payment",    to:"psa",         label:"Payment Confirmed → Close Ticket",  color:"#fb923c", type:"ar", step:6, highlight:true,
-      cpFn:(p1,p2)=>({ cpx:p1.x+80,                cpy:(p1.y+p2.y)/2-20 }),
-      detail:"Payment confirmation syncs back to the PSA, automatically closing the associated ticket or marking the contract invoice as paid. Eliminates manual reconciliation between billing and support." },
+    { id:"f6", from:"payment",    to:"psa",
+      label:"Payment Confirmed",         color:"#fb923c", type:"ar", step:6, highlight:true,
+      cpFn:(p1,p2)=>({cpx: p1.x + (p1.x-p2.x)*0.55, cpy: p1.y - (p1.y-p2.y)*0.35}),
+      detail:"Payment confirmation syncs back to the PSA, auto-closing the ticket and marking the invoice paid — no manual reconciliation needed." },
 
-    { id:"f7",  from:"payment",    to:"accounting",  label:"Payment Posted + Reconciled",       color:"#34d399", type:"ar", step:7,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p1.y+50 }),
-      detail:"Payment provider posts the collected amount back to the GL, closing the AR invoice and updating the balance sheet." },
+    { id:"f7", from:"payment",    to:"accounting",
+      label:"Payment Posted",            color:"#34d399", type:"ar", step:7,
+      cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.5,  cpy: p1.y + (p1.y-p2.y)*0.5}),
+      detail:"Payment provider posts the collected amount to the GL, closing the AR invoice and updating the balance sheet." },
 
-    { id:"f8",  from:"payment",    to:"bank",        label:"AR Settlement",                     color:"#fbbf24", type:"ar", step:8,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
-      detail:"Net funds (less processing fees) settle to the business bank account, typically T+1 for ACH, T+2 for card." },
+    { id:"f8", from:"payment",    to:"bank",
+      label:"AR Settlement",             color:"#fbbf24", type:"ar", step:8,
+      cpFn:(p1,p2)=>({cpx: p1.x,         cpy: p1.y + (p2.y-p1.y)*0.5}),
+      detail:"Net funds settle to the business bank account, typically T+1 for ACH, T+2 for card." },
 
-    // ── AP ──
-    { id:"f9",  from:"vendor",     to:"accounting",  label:"Vendor Bill / PO",                  color:"#f472b6", type:"ap", step:1,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
+    // AP ───────────────────────────────────────────────────────────────────────
+    { id:"f9",  from:"vendor",     to:"accounting",
+      label:"Vendor Bill / PO",          color:"#f472b6", type:"ap", step:1,
+      cpFn:(p1,p2)=>({cpx: p1.x,         cpy: p1.y - (p1.y-p2.y)*0.5}),
       detail:"Vendor sends an invoice via email, EDI, or portal. AP team enters or auto-captures the bill into the accounting system." },
 
-    { id:"f10", from:"accounting", to:"payment",     label:"Bill Pay Approval",                 color:"#34d399", type:"ap", step:2,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p1.y-35 }),
+    { id:"f10", from:"accounting", to:"payment",
+      label:"Bill Pay Approval",         color:"#34d399", type:"ap", step:2,
+      cpFn:(p1,p2)=>({cpx: p1.x + (p2.x-p1.x)*0.5,  cpy: p1.y - (p2.y-p1.y)*0.55}),
       detail:"Approved bills are pushed to the payment provider for scheduling and disbursement." },
 
-    { id:"f11", from:"payment",    to:"vendor",      label:"ACH / Check / Virtual Card",        color:"#fb923c", type:"ap", step:3,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p2.y+40 }),
-      detail:"Payment is disbursed to the vendor via ACH, virtual card, or check on the scheduled date." },
+    { id:"f11", from:"payment",    to:"vendor",
+      label:"ACH / Check / Virtual Card",color:"#fb923c", type:"ap", step:3,
+      cpFn:(p1,p2)=>({cpx: p1.x - (p1.x-p2.x)*0.5,  cpy: p2.y + (p2.y-p1.y)*0.4}),
+      detail:"Payment disbursed to the vendor via ACH, virtual card, or check on the scheduled date." },
 
-    { id:"f12", from:"bank",       to:"payment",     label:"AP Funding Source",                 color:"#fbbf24", type:"ap", step:4,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
-      detail:"Bank account is debited to fund the AP disbursement. The GL is updated, closing the AP bill." },
+    { id:"f12", from:"bank",       to:"payment",
+      label:"AP Funding Source",         color:"#fbbf24", type:"ap", step:4,
+      cpFn:(p1,p2)=>({cpx: p2.x,         cpy: p1.y - (p1.y-p2.y)*0.5}),
+      detail:"Bank account is debited to fund the AP disbursement. GL updated, closing the AP bill." },
   ],
-  acct:[
-    { id:"f1",  from:"customer",   to:"psa",         label:"Engagement / Project",              color:"#60a5fa", type:"ar", step:1,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
-      detail:"Client signs an engagement letter or project agreement. Work is tracked in the PM tool against milestones and budgeted hours." },
-
-    { id:"f2",  from:"psa",        to:"accounting",  label:"Billing Sync",                      color:"#a78bfa", type:"ar", step:2,
-      cpFn:(p1,p2)=>({ cpx:p1.x-60,                cpy:(p1.y+p2.y)/2+10 }),
-      detail:"PM tool syncs billable time or fixed-fee milestones to the accounting system, generating a draft invoice." },
-
-    { id:"f3",  from:"psa",        to:"payment",     label:"Payment Request Trigger",           color:"#a78bfa", type:"ar", step:3, highlight:true,
-      cpFn:(p1,p2)=>({ cpx:p2.x+55,                cpy:p1.y-20 }),
-      detail:"PM tool triggers a payment request directly through the payment provider — e.g., Karbon + Alternative Payments sends the client a pay-now link tied to the engagement." },
-
-    { id:"f4",  from:"accounting", to:"payment",     label:"Invoice Payment Link",              color:"#34d399", type:"ar", step:4,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p2.y+45 }),
-      detail:"For larger invoices, accounting sends a formal payment link or ACH request via the payment provider." },
-
-    { id:"f5",  from:"customer",   to:"payment",     label:"Card / ACH Payment",                color:"#fb923c", type:"ar", step:5,
-      cpFn:(p1,p2)=>({ cpx:p2.x+60,                cpy:p1.y+10 }),
-      detail:"Client pays via card or ACH. Surcharge pass-through optionally applied." },
-
-    { id:"f6",  from:"payment",    to:"psa",         label:"Payment Confirmed → Close Task",    color:"#fb923c", type:"ar", step:6, highlight:true,
-      cpFn:(p1,p2)=>({ cpx:p1.x+80,                cpy:(p1.y+p2.y)/2-20 }),
-      detail:"Payment confirmation syncs back to the PM tool, closing the billing milestone and notifying the team the engagement is settled." },
-
-    { id:"f7",  from:"payment",    to:"accounting",  label:"Payment Posted + Reconciled",       color:"#34d399", type:"ar", step:7,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p1.y+50 }),
-      detail:"Payment provider posts to the GL, closing the AR invoice and updating the client ledger." },
-
-    { id:"f8",  from:"payment",    to:"bank",        label:"AR Settlement",                     color:"#fbbf24", type:"ar", step:8,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
-      detail:"Net funds settle to the firm's bank account, typically T+1 or T+2." },
-
-    { id:"f9",  from:"vendor",     to:"accounting",  label:"Supplier Bill",                     color:"#f472b6", type:"ap", step:1,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
-      detail:"Software subscriptions, contractors, and office expenses are captured as vendor bills in the accounting system." },
-
-    { id:"f10", from:"accounting", to:"payment",     label:"Bill Pay Approval",                 color:"#34d399", type:"ap", step:2,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p1.y-35 }),
-      detail:"Approved bills are scheduled for payment through the payment provider." },
-
-    { id:"f11", from:"payment",    to:"vendor",      label:"ACH / Check / Card",                color:"#fb923c", type:"ap", step:3,
-      cpFn:(p1,p2)=>({ cpx:(p1.x+p2.x)/2,         cpy:p2.y+40 }),
-      detail:"Payment disbursed to the vendor on the scheduled date." },
-
-    { id:"f12", from:"bank",       to:"payment",     label:"AP Funding Source",                 color:"#fbbf24", type:"ap", step:4,
-      cpFn:(p1,p2)=>({ cpx:p1.x,                   cpy:(p1.y+p2.y)/2 }),
-      detail:"Bank account debited; GL updated to close the AP bill." },
-  ],
+  acct:[] // filled below by copying msp flows with updated labels
 };
 
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
+// Copy msp flows into acct with persona-specific label/detail overrides
+const ACCT_OVERRIDES = {
+  f1:{ label:"Engagement / Project",    detail:"Client signs an engagement letter. Work is tracked in the PM tool against milestones and budgeted hours." },
+  f2:{ label:"Billing Sync",            detail:"PM tool syncs billable time or fixed-fee milestones to the accounting system, generating a draft invoice." },
+  f3:{ label:"Payment Request Trigger", detail:"PM tool triggers a payment request directly through the payment provider — e.g., Karbon + Alternative Payments sends the client a pay-now link tied to the engagement." },
+  f4:{ label:"Invoice Payment Link",    detail:"For larger invoices, accounting sends a formal payment link or ACH request via the payment provider." },
+  f6:{ label:"Payment Confirmed",       detail:"Payment confirmation syncs back to the PM tool, closing the billing milestone and notifying the team." },
+  f9:{ label:"Supplier Bill",           detail:"Software subscriptions, contractors, and office expenses are captured as vendor bills in the accounting system." },
+};
+FLOWS_BY_PERSONA.acct = FLOWS_BY_PERSONA.msp.map(f => ({
+  ...f, ...(ACCT_OVERRIDES[f.id] || {}),
+}));
 
-function nodePos(node, w, h) { return { x:(node.x/100)*w, y:(node.y/100)*h }; }
-function lerp(a,b,t){ return a+(b-a)*t; }
-
-// ─── ANIMATED DOT ────────────────────────────────────────────────────────────
-
+// ─── ANIMATED DOT ─────────────────────────────────────────────────────────────
 function FlowDot({ x1,y1,x2,y2,cpx,cpy,color,delay,active }) {
   const [t,setT] = useState(0);
-  const rafRef = useRef(); const startRef = useRef(null);
-  const DUR = 2200;
-  useEffect(()=>{
-    if(!active){setT(0);startRef.current=null;return;}
-    const tick=(ts)=>{
-      if(!startRef.current) startRef.current=ts-(delay||0);
-      const el=Math.max(0,(ts-startRef.current))%DUR;
-      setT(el/DUR);
-      rafRef.current=requestAnimationFrame(tick);
+  const raf = useRef(); const t0 = useRef(null);
+  const DUR = 2400;
+  useEffect(() => {
+    if (!active) { setT(0); t0.current = null; return; }
+    const tick = (ts) => {
+      if (!t0.current) t0.current = ts - (delay || 0);
+      setT(Math.max(0, (ts - t0.current)) % DUR / DUR);
+      raf.current = requestAnimationFrame(tick);
     };
-    rafRef.current=requestAnimationFrame(tick);
-    return()=>cancelAnimationFrame(rafRef.current);
-  },[active,delay]);
-  if(!active) return null;
-  const mt=t;
-  const cx=(1-mt)*(1-mt)*x1+2*(1-mt)*mt*cpx+mt*mt*x2;
-  const cy=(1-mt)*(1-mt)*y1+2*(1-mt)*mt*cpy+mt*mt*y2;
-  const op=t<0.1?t/0.1:t>0.9?(1-t)/0.1:1;
+    raf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf.current);
+  }, [active, delay]);
+  if (!active) return null;
+  const cx = bezierPt(x1, cpx, x2, t);
+  const cy = bezierPt(y1, cpy, y2, t);
+  const op = t < 0.08 ? t/0.08 : t > 0.92 ? (1-t)/0.08 : 1;
   return <circle cx={cx} cy={cy} r={5} fill={color} opacity={op}/>;
 }
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [activeTab,    setActiveTab]    = useState("ar");
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [hoveredFlow,  setHoveredFlow]  = useState(null);
+  const [persona,      setPersona]      = useState("msp");
+  const [animStep,     setAnimStep]     = useState(null);
+  const [svgSize,      setSvgSize]      = useState({ w:720, h:500 });
+  const [panelOpen,    setPanelOpen]    = useState(true);
+  const [hiddenFlows,  setHiddenFlows]  = useState(new Set());
+  const containerRef = useRef();
+  const animRef      = useRef();
 
-function App(){
-  const [activeTab,setActiveTab]       = useState("ar");
-  const [selectedNode,setSelectedNode] = useState(null);
-  const [hoveredFlow,setHoveredFlow]   = useState(null);
-  const [persona,setPersona]           = useState("msp");
-  const [animStep,setAnimStep]         = useState(null);
-  const [svgSize,setSvgSize]           = useState({w:720,h:520});
-  const [panelOpen,setPanelOpen]       = useState(true);
-  // Per-flow visibility toggle: null means all visible
-  const [hiddenFlows,setHiddenFlows]   = useState(new Set());
-  const containerRef=useRef(); const animRef=useRef();
+  const NODES  = { ...BASE_NODES, psa: PSA_BY_PERSONA[persona] };
+  const FLOWS  = FLOWS_BY_PERSONA[persona];
+  const tabFlows     = FLOWS.filter(f => activeTab === "all" ? true : f.type === activeTab);
+  const visibleFlows = tabFlows.filter(f => !hiddenFlows.has(f.id));
 
-  const NODES   = { ...BASE_NODES, psa:PSA_BY_PERSONA[persona] };
-  const FLOWS   = FLOWS_BY_PERSONA[persona];
-  const visibleFlows = FLOWS.filter(f=>
-    (activeTab==="all"?true:f.type===activeTab) && !hiddenFlows.has(f.id)
-  );
-
-  useEffect(()=>{
-    const obs=new ResizeObserver(entries=>{
-      for(const e of entries){
-        const {width,height}=e.contentRect;
-        setSvgSize({w:Math.max(width,300),h:Math.max(height,380)});
+  useEffect(() => {
+    const obs = new ResizeObserver(entries => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        setSvgSize({ w: Math.max(width, 280), h: Math.max(height, 340) });
       }
     });
-    if(containerRef.current) obs.observe(containerRef.current);
-    return()=>obs.disconnect();
-  },[]);
+    if (containerRef.current) obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
 
-  useEffect(()=>{ setSelectedNode(null); setAnimStep(null); },[persona]);
+  useEffect(() => { setSelectedNode(null); setAnimStep(null); }, [persona]);
 
-  const {w,h} = svgSize;
-  const NODE_R = Math.max(24,Math.min(32,w/24));
+  const { w, h } = svgSize;
+  // Node radius scales with available space but stays sensible
+  const NR = Math.max(22, Math.min(30, (w - 2*PAD_X) / 10));
 
-  const playSteps=useCallback(()=>{
+  const playSteps = useCallback(() => {
     clearInterval(animRef.current);
-    // Only animate flows that are currently visible
-    const maxStep=Math.max(...visibleFlows.map(f=>f.step));
-    let s=1; setAnimStep(s);
-    animRef.current=setInterval(()=>{
+    const maxS = Math.max(...visibleFlows.map(f => f.step));
+    let s = 1; setAnimStep(s);
+    animRef.current = setInterval(() => {
       s++;
-      if(s>maxStep){clearInterval(animRef.current);setTimeout(()=>setAnimStep(null),1000);return;}
+      if (s > maxS) { clearInterval(animRef.current); setTimeout(() => setAnimStep(null), 1000); return; }
       setAnimStep(s);
-    },1300);
-  },[visibleFlows]);
+    }, 1300);
+  }, [visibleFlows]);
 
-  useEffect(()=>()=>clearInterval(animRef.current),[]);
+  useEffect(() => () => clearInterval(animRef.current), []);
 
-  const activeFlows = animStep ? visibleFlows.filter(f=>f.step<=animStep) : visibleFlows;
+  const activeFlows  = animStep ? visibleFlows.filter(f => f.step <= animStep) : visibleFlows;
+  const toggleFlow   = id => setHiddenFlows(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const hoveredFlowObj = hoveredFlow ? FLOWS.find(f => f.id === hoveredFlow) : null;
 
-  const toggleFlow=(id)=>{
-    setHiddenFlows(prev=>{
-      const next=new Set(prev);
-      next.has(id)?next.delete(id):next.add(id);
-      return next;
-    });
-  };
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"#0f1117", color:"#e2e8f0" }}>
 
-  const allTabFlows = FLOWS.filter(f=>activeTab==="all"?true:f.type===activeTab);
-
-  return(
-    <div style={{display:"flex",flexDirection:"column",height:"100vh",background:"#0f1117",color:"#e2e8f0"}}>
-
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div style={{padding:"12px 18px 9px",borderBottom:"1px solid #1e2535",flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      {/* ── Header ── */}
+      <div style={{ padding:"10px 16px 8px", borderBottom:"1px solid #1e2535", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
           <div>
-            <h1 style={{fontSize:17,fontWeight:700,color:"#f8fafc",letterSpacing:"-0.3px"}}>
+            <h1 style={{ fontSize:16, fontWeight:700, color:"#f8fafc", letterSpacing:"-0.3px" }}>
               MSP &amp; Accounting — AR/AP Flow
             </h1>
-            <p style={{fontSize:11,color:"#64748b",marginTop:2}}>
-              Toggle flows on/off · Click nodes to explore · Switch persona to swap stack
+            <p style={{ fontSize:11, color:"#64748b", marginTop:1 }}>
+              Toggle flows · Click nodes · Switch persona
             </p>
           </div>
-          {/* Persona */}
-          <div style={{marginLeft:"auto",display:"flex",background:"#1e293b",borderRadius:24,padding:3,border:"1px solid #334155",gap:2}}>
-            {[{id:"msp",label:"🖥 MSP",sub:"PSA-led"},{id:"acct",label:"📊 Accounting Firm",sub:"PM-led"}].map(p=>(
-              <button key={p.id} onClick={()=>setPersona(p.id)} style={{
-                padding:"4px 12px",borderRadius:20,border:"none",fontSize:12,cursor:"pointer",fontWeight:600,transition:"all .2s",
-                background:persona===p.id?"#1e40af":"transparent",
-                color:persona===p.id?"#93c5fd":"#64748b",
-              }}>{p.label} <span style={{fontSize:10,opacity:.7}}>{p.sub}</span></button>
+          <div style={{ marginLeft:"auto", display:"flex", background:"#1e293b", borderRadius:24,
+            padding:3, border:"1px solid #334155", gap:2 }}>
+            {[{id:"msp",l:"🖥 MSP",s:"PSA-led"},{id:"acct",l:"📊 Acct Firm",s:"PM-led"}].map(p => (
+              <button key={p.id} onClick={() => setPersona(p.id)} style={{
+                padding:"4px 11px", borderRadius:20, border:"none", fontSize:12,
+                cursor:"pointer", fontWeight:600, transition:"all .2s",
+                background: persona===p.id ? "#1e40af" : "transparent",
+                color: persona===p.id ? "#93c5fd" : "#64748b",
+              }}>{p.l} <span style={{ fontSize:10, opacity:.65 }}>{p.s}</span></button>
             ))}
           </div>
         </div>
 
-        <div style={{marginTop:7,padding:"6px 11px",background:"#1e293b",borderRadius:8,
-          fontSize:12,color:"#94a3b8",borderLeft:"3px solid #3b82f6"}}>
+        <div style={{ marginTop:6, padding:"5px 10px", background:"#1e293b", borderRadius:8,
+          fontSize:11, color:"#94a3b8", borderLeft:"3px solid #3b82f6" }}>
           {persona==="msp"
-            ?"MSP stack: PSA is the billing engine. It triggers invoices, syncs to accounting, and connects directly to the payment provider for auto-billing on recurring contracts."
-            :"Accounting firm stack: PM tool replaces PSA. It tracks engagement milestones, triggers payment requests, and syncs confirmations back when clients pay."}
+            ? "MSP stack: PSA is the billing engine — triggers invoices, syncs to accounting, and connects directly to the payment provider for auto-billing on recurring contracts."
+            : "Accounting firm stack: PM tool replaces PSA — tracks engagements, triggers payment requests, and syncs confirmations when clients pay."}
         </div>
 
-        {/* Tabs + controls */}
-        <div style={{display:"flex",gap:7,marginTop:9,alignItems:"center",flexWrap:"wrap"}}>
-          {[["ar","💰 AR Flow","#60a5fa"],["ap","📤 AP Flow","#f472b6"],["all","🔄 Full View","#a78bfa"]].map(([id,lbl,col])=>(
-            <button key={id} onClick={()=>{setActiveTab(id);setAnimStep(null);}} style={{
-              padding:"4px 13px",borderRadius:20,border:"1px solid",fontSize:13,cursor:"pointer",fontWeight:600,transition:"all .2s",
-              background:activeTab===id?`${col}22`:"transparent",
-              borderColor:activeTab===id?col:"#334155",
-              color:activeTab===id?col:"#64748b",
+        <div style={{ display:"flex", gap:6, marginTop:7, alignItems:"center", flexWrap:"wrap" }}>
+          {[["ar","💰 AR","#60a5fa"],["ap","📤 AP","#f472b6"],["all","🔄 All","#a78bfa"]].map(([id,lbl,col]) => (
+            <button key={id} onClick={() => { setActiveTab(id); setAnimStep(null); }} style={{
+              padding:"4px 12px", borderRadius:20, border:"1px solid", fontSize:12,
+              cursor:"pointer", fontWeight:600, transition:"all .2s",
+              background: activeTab===id ? `${col}22` : "transparent",
+              borderColor: activeTab===id ? col : "#334155",
+              color: activeTab===id ? col : "#64748b",
             }}>{lbl}</button>
           ))}
-          <button onClick={playSteps} style={{
-            padding:"4px 13px",borderRadius:20,border:"1px solid #334155",
-            fontSize:13,cursor:"pointer",background:"#1e293b",color:"#94a3b8",
-          }}>▶ Animate</button>
-          {hiddenFlows.size>0 && (
-            <button onClick={()=>setHiddenFlows(new Set())} style={{
-              padding:"4px 13px",borderRadius:20,border:"1px solid #ef4444",
-              fontSize:12,cursor:"pointer",background:"#1e293b",color:"#ef4444",
-            }}>Reset ({hiddenFlows.size} hidden)</button>
+          <button onClick={playSteps} style={{ padding:"4px 12px", borderRadius:20, border:"1px solid #334155",
+            fontSize:12, cursor:"pointer", background:"#1e293b", color:"#94a3b8" }}>▶ Animate</button>
+          {hiddenFlows.size > 0 && (
+            <button onClick={() => setHiddenFlows(new Set())} style={{ padding:"4px 11px", borderRadius:20,
+              border:"1px solid #ef4444", fontSize:11, cursor:"pointer", background:"#1e293b", color:"#ef4444" }}>
+              Reset ({hiddenFlows.size} hidden)
+            </button>
           )}
-          <button onClick={()=>setPanelOpen(v=>!v)} style={{
-            marginLeft:"auto",padding:"4px 12px",borderRadius:20,border:"1px solid #334155",
-            fontSize:12,cursor:"pointer",background:"#1e293b",color:"#94a3b8",
-          }}>{panelOpen?"Hide →":"← Panel"}</button>
+          <button onClick={() => setPanelOpen(v => !v)} style={{ marginLeft:"auto", padding:"4px 11px",
+            borderRadius:20, border:"1px solid #334155", fontSize:11, cursor:"pointer",
+            background:"#1e293b", color:"#94a3b8" }}>
+            {panelOpen ? "Hide →" : "← Panel"}
+          </button>
         </div>
       </div>
 
-      {/* ── Body ────────────────────────────────────────────────────────────── */}
-      <div style={{display:"flex",flex:1,overflow:"hidden",minHeight:0}}>
+      {/* ── Body ── */}
+      <div style={{ display:"flex", flex:1, overflow:"hidden", minHeight:0 }}>
 
         {/* SVG Canvas */}
-        <div ref={containerRef} style={{flex:1,position:"relative",minHeight:0}}>
-          <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`} style={{display:"block"}}>
+        <div ref={containerRef} style={{ flex:1, position:"relative", minHeight:0, overflow:"hidden" }}>
+          <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`} style={{ display:"block" }}>
             <defs>
-              {Object.values(NODES).map(nd=>(
-                <radialGradient key={nd.id} id={`grad-${nd.id}`} cx="50%" cy="50%" r="50%">
-                  <stop offset="0%"   stopColor={nd.color} stopOpacity="0.28"/>
-                  <stop offset="100%" stopColor={nd.color} stopOpacity="0.02"/>
+              {Object.values(NODES).map(nd => (
+                <radialGradient key={nd.id} id={`grd-${nd.id}`} cx="50%" cy="50%" r="50%">
+                  <stop offset="0%"   stopColor={nd.color} stopOpacity="0.22"/>
+                  <stop offset="100%" stopColor={nd.color} stopOpacity="0.01"/>
                 </radialGradient>
               ))}
-              <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-              <filter id="glow2"><feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-              {FLOWS.map(f=>(
+              <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <filter id="glow2" x="-80%" y="-80%" width="260%" height="260%">
+                <feGaussianBlur stdDeviation="7" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              {FLOWS.map(f => (
                 <marker key={f.id} id={`arr-${f.id}`} markerWidth="7" markerHeight="7" refX="5" refY="2.5" orient="auto">
                   <path d="M0,0 L0,5 L7,2.5 z" fill={f.color} opacity={0.9}/>
                 </marker>
@@ -337,226 +326,232 @@ function App(){
             </pattern></defs>
             <rect width={w} height={h} fill="url(#grid)"/>
 
-            {/* ── Flows ── */}
-            {allTabFlows.map(flow=>{
-              const from=NODES[flow.from]; const to=NODES[flow.to];
-              if(!from||!to) return null;
-              const p1=nodePos(from,w,h); const p2=nodePos(to,w,h);
-              const {cpx,cpy}=flow.cpFn(p1,p2,w,h);
-              const path=`M ${p1.x} ${p1.y} Q ${cpx} ${cpy} ${p2.x} ${p2.y}`;
-
+            {/* ── LAYER 1: Flow lines ── */}
+            {tabFlows.map(flow => {
+              const from = NODES[flow.from]; const to = NODES[flow.to];
+              if (!from || !to) return null;
+              const p1 = nodePos(from, w, h);
+              const p2 = nodePos(to,   w, h);
+              const { cpx, cpy } = flow.cpFn(p1, p2, w, h);
+              const path = `M ${p1.x} ${p1.y} Q ${cpx} ${cpy} ${p2.x} ${p2.y}`;
               const isHidden  = hiddenFlows.has(flow.id);
-              const isVisible = !isHidden && (activeTab==="all"?true:flow.type===activeTab);
-              const isActive  = isVisible && activeFlows.includes(flow);
-              const isHovered = hoveredFlow===flow.id;
-              const isHL      = flow.highlight;
+              const isActive  = !isHidden && activeFlows.includes(flow);
+              const isHovered = hoveredFlow === flow.id;
+              const isHL      = !!flow.highlight;
+              const dimmed    = animStep && !isActive && !isHidden;
 
-              // Mid-curve label position (t=0.5 on bezier)
-              const mt=0.5;
-              const tx=(1-mt)*(1-mt)*p1.x+2*(1-mt)*mt*cpx+mt*mt*p2.x;
-              const ty=(1-mt)*(1-mt)*p1.y+2*(1-mt)*mt*cpy+mt*mt*p2.y-10;
-
-              return(
+              return (
                 <g key={flow.id}
-                  opacity={isHidden ? 0.12 : animStep ? (isActive?1:0.1) : 1}
-                  style={{transition:"opacity 0.35s",cursor:"pointer"}}
-                  onMouseEnter={()=>setHoveredFlow(flow.id)}
-                  onMouseLeave={()=>setHoveredFlow(null)}
-                  onClick={()=>setHoveredFlow(isHovered?null:flow.id)}>
-
-                  {/* Wide invisible hit area */}
-                  <path d={path} fill="none" stroke="transparent" strokeWidth={20}/>
-
-                  {/* Glow for highlight or hover */}
-                  {(isHL||isHovered)&&!isHidden&&(
+                  opacity={isHidden ? 0.08 : dimmed ? 0.07 : 1}
+                  style={{ transition:"opacity 0.35s", cursor:"pointer" }}
+                  onMouseEnter={() => setHoveredFlow(flow.id)}
+                  onMouseLeave={() => setHoveredFlow(null)}
+                  onClick={() => setHoveredFlow(isHovered ? null : flow.id)}>
+                  <path d={path} fill="none" stroke="transparent" strokeWidth={24}/>
+                  {(isHL || isHovered) && !isHidden && (
                     <path d={path} fill="none" stroke={flow.color}
-                      strokeWidth={isHL?10:6} opacity={isHL?0.12:0.18} filter="url(#glow2)"/>
+                      strokeWidth={isHL ? 9 : 6} opacity={0.12} filter="url(#glow2)"/>
                   )}
-
-                  {/* Main line */}
                   <path d={path} fill="none" stroke={flow.color}
-                    strokeWidth={isHovered?2.8:isHL?2.2:1.6}
-                    strokeDasharray={flow.type==="ap"?"8 4":"none"}
+                    strokeWidth={isHovered ? 2.8 : isHL ? 2.2 : 1.6}
+                    strokeDasharray={flow.type==="ap" ? "8 4" : "none"}
                     markerEnd={`url(#arr-${flow.id})`}
-                    opacity={isHidden?0.15:isHovered?1:isHL?0.85:0.55}/>
-
-                  {/* Always-on label for highlight flows */}
-                  {isHL&&!isHidden&&!isHovered&&(activeTab==="ar"||activeTab==="all")&&(
-                    <text x={tx} y={ty} textAnchor="middle" fontSize={9}
-                      fill={flow.color} fontWeight={700} opacity={0.75}
-                      style={{userSelect:"none",pointerEvents:"none"}}>
-                      {flow.label}
-                    </text>
-                  )}
-
-                  {/* Hover tooltip */}
-                  {isHovered&&(
-                    <>
-                      <rect x={tx-115} y={ty-40} width={230} height={58} rx={7}
-                        fill="#1a2235" stroke={flow.color} strokeWidth={1.2} opacity={0.98}/>
-                      <text x={tx} y={ty-22} textAnchor="middle" fontSize={10}
-                        fill={flow.color} fontWeight={700} style={{userSelect:"none"}}>
-                        Step {flow.step} · {flow.label}
-                      </text>
-                      <foreignObject x={tx-108} y={ty-15} width={216} height={38}>
-                        <div xmlns="http://www.w3.org/1999/xhtml"
-                          style={{fontSize:10,color:"#94a3b8",lineHeight:"1.45",wordBreak:"break-word"}}>
-                          {flow.detail}
-                        </div>
-                      </foreignObject>
-                    </>
-                  )}
-
-                  {/* Animated dot */}
+                    opacity={isHidden ? 0.08 : isHovered ? 1 : isHL ? 0.9 : 0.5}/>
                   <FlowDot x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
                     cpx={cpx} cpy={cpy} color={flow.color}
-                    delay={flow.step*200} active={isActive&&!isHidden}/>
+                    delay={flow.step * 200} active={isActive && !isHidden}/>
                 </g>
               );
             })}
 
-            {/* ── Nodes ── */}
-            {Object.values(NODES).map(nd=>{
-              const p=nodePos(nd,w,h);
-              const isSel=selectedNode?.id===nd.id;
-              const isPay=nd.id==="payment";
-              return(
-                <g key={nd.id} style={{cursor:"pointer"}}
-                  onClick={()=>{setSelectedNode(isSel?null:nd);if(!panelOpen)setPanelOpen(true);}}>
-                  <circle cx={p.x} cy={p.y} r={NODE_R+(isPay?28:20)}
-                    fill={`url(#grad-${nd.id})`} opacity={isPay?0.9:0.8}/>
-                  {isSel&&(
-                    <circle cx={p.x} cy={p.y} r={NODE_R+7} fill="none"
-                      stroke={nd.color} strokeWidth={1.5} opacity={0.4}>
-                      <animate attributeName="r" values={`${NODE_R+5};${NODE_R+17};${NODE_R+5}`} dur="2s" repeatCount="indefinite"/>
+            {/* ── LAYER 2: Node circles ── */}
+            {Object.values(NODES).map(nd => {
+              const p    = nodePos(nd, w, h);
+              const isSel = selectedNode?.id === nd.id;
+              const isPay = nd.id === "payment";
+              return (
+                <g key={`node-${nd.id}`} style={{ cursor:"pointer" }}
+                  onClick={() => { setSelectedNode(isSel ? null : nd); if (!panelOpen) setPanelOpen(true); }}>
+                  <circle cx={p.x} cy={p.y} r={NR + (isPay ? 24 : 17)}
+                    fill={`url(#grd-${nd.id})`} opacity={isPay ? 0.85 : 0.7}/>
+                  {isSel && (
+                    <circle cx={p.x} cy={p.y} r={NR+7} fill="none" stroke={nd.color} strokeWidth={1.5} opacity={0.4}>
+                      <animate attributeName="r" values={`${NR+5};${NR+15};${NR+5}`} dur="2s" repeatCount="indefinite"/>
                       <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite"/>
                     </circle>
                   )}
-                  {isPay&&(
-                    <circle cx={p.x} cy={p.y} r={NODE_R+8} fill="none"
-                      stroke="#fb923c" strokeWidth={1} opacity={0.2}>
-                      <animate attributeName="r" values={`${NODE_R+7};${NODE_R+16};${NODE_R+7}`} dur="3s" repeatCount="indefinite"/>
-                      <animate attributeName="opacity" values="0.2;0.04;0.2" dur="3s" repeatCount="indefinite"/>
+                  {isPay && (
+                    <circle cx={p.x} cy={p.y} r={NR+8} fill="none" stroke="#fb923c" strokeWidth={1} opacity={0.18}>
+                      <animate attributeName="r" values={`${NR+7};${NR+15};${NR+7}`} dur="3s" repeatCount="indefinite"/>
+                      <animate attributeName="opacity" values="0.18;0.03;0.18" dur="3s" repeatCount="indefinite"/>
                     </circle>
                   )}
-                  <circle cx={p.x} cy={p.y} r={NODE_R+3} fill="none"
-                    stroke={nd.color} strokeWidth={isSel?2:1}
-                    opacity={isSel?0.9:isPay?0.55:0.28}/>
-                  <circle cx={p.x} cy={p.y} r={NODE_R}
-                    fill={isSel?`${nd.color}28`:"#111827"}
-                    stroke={nd.color} strokeWidth={isPay?2:1.5}
-                    filter={(isSel||isPay)?"url(#glow)":undefined}/>
+                  <circle cx={p.x} cy={p.y} r={NR+3} fill="none" stroke={nd.color}
+                    strokeWidth={isSel ? 2 : 1} opacity={isSel ? 0.9 : isPay ? 0.5 : 0.22}/>
+                  <circle cx={p.x} cy={p.y} r={NR}
+                    fill={isSel ? `${nd.color}28` : "#0f1117"}
+                    stroke={nd.color} strokeWidth={isPay ? 2 : 1.5}
+                    filter={(isSel || isPay) ? "url(#glow)" : undefined}/>
+                  {/* Icon */}
                   <text x={p.x} y={p.y+2} textAnchor="middle" dominantBaseline="middle"
-                    fontSize={NODE_R*.68} style={{userSelect:"none",pointerEvents:"none"}}>
+                    fontSize={NR * 0.68} style={{ userSelect:"none", pointerEvents:"none" }}>
                     {nd.icon}
                   </text>
-                  <text x={p.x} y={p.y+NODE_R+13} textAnchor="middle"
-                    fontSize={11} fill={nd.color} fontWeight={700}
-                    style={{userSelect:"none",pointerEvents:"none"}}>
+                </g>
+              );
+            })}
+
+            {/* ── LAYER 3: Node labels — drawn last so always above lines ── */}
+            {Object.values(NODES).map(nd => {
+              const p = nodePos(nd, w, h);
+              // label sits below the node circle
+              const labelY = p.y + NR + 16;
+              const roleY  = p.y + NR + 29;
+              // pill background width: generous so text never clips
+              const pillW  = 120; const pillH = 28;
+              return (
+                <g key={`lbl-${nd.id}`} style={{ pointerEvents:"none", userSelect:"none" }}>
+                  {/* Dark background pill behind text */}
+                  <rect
+                    x={p.x - pillW/2} y={labelY - 13}
+                    width={pillW} height={pillH}
+                    rx={5} fill="#0a0d14" opacity={0.92}
+                  />
+                  <text x={p.x} y={labelY} textAnchor="middle"
+                    fontSize={11} fill={nd.color} fontWeight={700}>
                     {nd.label}
                   </text>
-                  <text x={p.x} y={p.y+NODE_R+25} textAnchor="middle"
-                    fontSize={9} fill="#4b5563"
-                    style={{userSelect:"none",pointerEvents:"none"}}>
+                  <text x={p.x} y={roleY} textAnchor="middle"
+                    fontSize={9} fill="#4b5563">
                     {nd.role}
                   </text>
                 </g>
               );
             })}
+
+            {/* ── LAYER 4: Hover tooltip — always on very top, clamped inside canvas ── */}
+            {hoveredFlowObj && (() => {
+              const from = NODES[hoveredFlowObj.from];
+              const to   = NODES[hoveredFlowObj.to];
+              if (!from || !to) return null;
+              const p1 = nodePos(from, w, h);
+              const p2 = nodePos(to,   w, h);
+              const { cpx, cpy } = hoveredFlowObj.cpFn(p1, p2, w, h);
+              // Bezier midpoint (t=0.5)
+              const mx = bezierPt(p1.x, cpx, p2.x, 0.5);
+              const my = bezierPt(p1.y, cpy, p2.y, 0.5);
+
+              const TW = 230; const TH = 72;
+              const MARGIN = 10;
+              // Try to place tooltip above the midpoint; fall back to below
+              let bx = mx - TW/2;
+              let by = my - TH - 14;
+              // Clamp horizontally
+              bx = Math.max(MARGIN, Math.min(w - TW - MARGIN, bx));
+              // If it would go above the top, place it below instead
+              if (by < MARGIN) by = my + 14;
+              // Clamp vertically at bottom
+              if (by + TH > h - MARGIN) by = h - TH - MARGIN;
+
+              // Wrap detail text manually (approx 38 chars per line)
+              const detail = hoveredFlowObj.detail;
+
+              return (
+                <g>
+                  <rect x={bx} y={by} width={TW} height={TH} rx={7}
+                    fill="#141a28" stroke={hoveredFlowObj.color} strokeWidth={1.3} opacity={0.99}/>
+                  {/* Step + label */}
+                  <text x={bx+11} y={by+15} fontSize={10} fill={hoveredFlowObj.color} fontWeight={700}>
+                    {`Step ${hoveredFlowObj.step}  ·  ${hoveredFlowObj.label}`}
+                    {hoveredFlowObj.highlight ? "  ⚡" : ""}
+                  </text>
+                  {/* Detail — use foreignObject for word-wrap */}
+                  <foreignObject x={bx+10} y={by+21} width={TW-20} height={TH-26}>
+                    <div xmlns="http://www.w3.org/1999/xhtml"
+                      style={{ fontSize:10, color:"#94a3b8", lineHeight:"1.5",
+                               wordBreak:"break-word", overflow:"hidden" }}>
+                      {detail}
+                    </div>
+                  </foreignObject>
+                </g>
+              );
+            })()}
+
           </svg>
 
-          {animStep&&(
-            <div style={{position:"absolute",bottom:14,left:"50%",transform:"translateX(-50%)",
-              background:"#1e293b",border:"1px solid #334155",borderRadius:20,
-              padding:"4px 16px",fontSize:12,color:"#94a3b8"}}>
-              Step {animStep} / {Math.max(...visibleFlows.map(f=>f.step))}
+          {animStep && (
+            <div style={{ position:"absolute", bottom:12, left:"50%", transform:"translateX(-50%)",
+              background:"#1e293b", border:"1px solid #334155", borderRadius:20,
+              padding:"4px 16px", fontSize:12, color:"#94a3b8", pointerEvents:"none",
+              whiteSpace:"nowrap" }}>
+              Step {animStep} / {Math.max(...visibleFlows.map(f => f.step))}
             </div>
           )}
         </div>
 
-        {/* ── Right Panel ─────────────────────────────────────────────── */}
-        {panelOpen&&(
-          <div style={{width:282,borderLeft:"1px solid #1e2535",overflowY:"auto",
-            padding:14,flexShrink:0}}>
+        {/* ── Right Panel ── */}
+        {panelOpen && (
+          <div style={{ width:276, borderLeft:"1px solid #1e2535", overflowY:"auto",
+            padding:13, flexShrink:0 }}>
             {selectedNode
-              ? <NodeDetail node={selectedNode} flows={FLOWS} onClose={()=>setSelectedNode(null)} NODES={NODES}/>
-              : <FlowPanel
-                  flows={FLOWS}
-                  activeTab={activeTab}
-                  hiddenFlows={hiddenFlows}
-                  toggleFlow={toggleFlow}
-                  onHover={setHoveredFlow}
-                  persona={persona}
-                  NODES={NODES}/>
+              ? <NodeDetail node={selectedNode} flows={FLOWS} onClose={() => setSelectedNode(null)} NODES={NODES}/>
+              : <FlowPanel  flows={FLOWS} activeTab={activeTab} hiddenFlows={hiddenFlows}
+                  toggleFlow={toggleFlow} onHover={setHoveredFlow} persona={persona} NODES={NODES}/>
             }
           </div>
         )}
       </div>
 
       {/* Footer */}
-      <div style={{borderTop:"1px solid #1e2535",padding:"6px 18px",fontSize:11,
-        color:"#334155",display:"flex",gap:14,flexShrink:0,flexWrap:"wrap"}}>
-        <span>— Solid = AR (inbound)</span>
-        <span>- - - Dashed = AP (outbound)</span>
-        <span>⚡ Highlighted = PSA ↔ Payment direct</span>
-        <span style={{marginLeft:"auto"}}>Click flows in panel to hide/show</span>
+      <div style={{ borderTop:"1px solid #1e2535", padding:"5px 16px", fontSize:10,
+        color:"#2d3a4f", display:"flex", gap:14, flexShrink:0, flexWrap:"wrap" }}>
+        <span>— Solid = AR</span>
+        <span>- - - Dashed = AP</span>
+        <span>⚡ = PSA ↔ Payment direct</span>
+        <span style={{ marginLeft:"auto" }}>Hover lines · Click to toggle</span>
       </div>
     </div>
   );
 }
 
-// ─── FLOW TOGGLE PANEL ────────────────────────────────────────────────────────
-
+// ─── FLOW PANEL ───────────────────────────────────────────────────────────────
 function FlowPanel({ flows, activeTab, hiddenFlows, toggleFlow, onHover, persona, NODES }) {
-  const tabFlows = flows.filter(f=>activeTab==="all"?true:f.type===activeTab);
-  const arFlows  = tabFlows.filter(f=>f.type==="ar");
-  const apFlows  = tabFlows.filter(f=>f.type==="ap");
+  const tabFlows = flows.filter(f => activeTab==="all" ? true : f.type===activeTab);
+  const arF = tabFlows.filter(f => f.type==="ar");
+  const apF = tabFlows.filter(f => f.type==="ap");
 
-  const Section = ({ title, sflows, color }) => (
-    <div style={{marginBottom:14}}>
-      <div style={{fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",
-        letterSpacing:1,marginBottom:8}}>{title}</div>
-      {sflows.map(f=>{
-        const isHidden=hiddenFlows.has(f.id);
-        const fromNode=NODES[f.from]; const toNode=NODES[f.to];
-        return(
+  const Sec = ({ title, sflows }) => (
+    <div style={{ marginBottom:13 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+        letterSpacing:1, marginBottom:7 }}>{title}</div>
+      {sflows.map(f => {
+        const hidden = hiddenFlows.has(f.id);
+        return (
           <div key={f.id}
-            style={{
-              display:"flex",alignItems:"flex-start",gap:8,
-              background:isHidden?"#0f172a":"#1e293b",
-              borderRadius:7,padding:"7px 9px",marginBottom:5,
-              borderLeft:`3px solid ${isHidden?"#334155":f.color}`,
-              cursor:"pointer",transition:"all .15s",
-              opacity:isHidden?0.5:1,
-            }}
-            onMouseEnter={()=>{ if(!isHidden) onHover(f.id); }}
-            onMouseLeave={()=>onHover(null)}
-            onClick={()=>toggleFlow(f.id)}>
-
-            {/* Toggle eye */}
-            <div style={{
-              flexShrink:0,width:18,height:18,borderRadius:4,
-              border:`1px solid ${isHidden?"#334155":f.color}`,
-              background:isHidden?"transparent":`${f.color}22`,
-              display:"flex",alignItems:"center",justifyContent:"center",
-              fontSize:10,marginTop:1,
-            }}>
-              {isHidden?"—":"✓"}
+            style={{ display:"flex", alignItems:"flex-start", gap:7,
+              background: hidden ? "#0a0d14" : "#1e293b",
+              borderRadius:7, padding:"6px 8px", marginBottom:4,
+              borderLeft:`3px solid ${hidden ? "#334155" : f.color}`,
+              cursor:"pointer", transition:"all .15s", opacity: hidden ? 0.42 : 1 }}
+            onMouseEnter={() => { if (!hidden) onHover(f.id); }}
+            onMouseLeave={() => onHover(null)}
+            onClick={() => toggleFlow(f.id)}>
+            <div style={{ flexShrink:0, width:17, height:17, borderRadius:4, marginTop:1,
+              border:`1px solid ${hidden ? "#334155" : f.color}`,
+              background: hidden ? "transparent" : `${f.color}22`,
+              display:"flex", alignItems:"center", justifyContent:"center", fontSize:9 }}>
+              {hidden ? "–" : "✓"}
             </div>
-
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:3,flexWrap:"wrap"}}>
-                <span style={{fontSize:10}}>{fromNode?.icon}</span>
-                <span style={{fontSize:10,color:"#475569"}}>→</span>
-                <span style={{fontSize:10}}>{toNode?.icon}</span>
-                <span style={{fontSize:10,color:isHidden?"#475569":f.color,fontWeight:600}}>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ display:"flex", gap:4, alignItems:"center", marginBottom:2, flexWrap:"wrap" }}>
+                <span style={{ fontSize:10, color: hidden ? "#475569" : f.color, fontWeight:600 }}>
                   {f.label}
                 </span>
-                {f.highlight&&<span style={{fontSize:9,color:"#fb923c",background:"#fb923c18",
-                  borderRadius:6,padding:"1px 5px"}}>⚡ direct</span>}
-                <span style={{fontSize:9,color:"#334155",marginLeft:"auto"}}>step {f.step}</span>
+                {f.highlight && <span style={{ fontSize:9, color:"#fb923c", background:"#fb923c14",
+                  borderRadius:6, padding:"1px 5px" }}>⚡ direct</span>}
+                <span style={{ fontSize:9, color:"#334155", marginLeft:"auto" }}>step {f.step}</span>
               </div>
-              <div style={{fontSize:10,color:"#4b5563",lineHeight:1.45}}>{f.detail}</div>
+              <div style={{ fontSize:10, color:"#4b5563", lineHeight:1.4 }}>{f.detail}</div>
             </div>
           </div>
         );
@@ -564,35 +559,26 @@ function FlowPanel({ flows, activeTab, hiddenFlows, toggleFlow, onHover, persona
     </div>
   );
 
-  return(
+  return (
     <div>
-      <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",
-        letterSpacing:1,marginBottom:10}}>
-        Flow Controls
+      <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+        letterSpacing:1, marginBottom:8 }}>Flow Controls</div>
+      <div style={{ background:"#0f172a", border:"1px solid #1e2535", borderRadius:8,
+        padding:"6px 10px", marginBottom:11, fontSize:11, color:"#64748b", lineHeight:1.5 }}>
+        Click a row to <strong style={{ color:"#94a3b8" }}>hide or show</strong> it on the map. Hover to highlight.
       </div>
-      <div style={{background:"#0f172a",border:"1px solid #1e2535",borderRadius:8,
-        padding:"8px 10px",marginBottom:14,fontSize:11,color:"#64748b",lineHeight:1.5}}>
-        Click any flow to <strong style={{color:"#94a3b8"}}>hide or show</strong> it on the map.
-        Hover to highlight. Use this to walk through the flow step by step.
-      </div>
-
-      {(activeTab==="ar"||activeTab==="all") && arFlows.length>0 &&(
-        <Section title="💰 AR Flows" sflows={arFlows} />
-      )}
-      {(activeTab==="ap"||activeTab==="all") && apFlows.length>0 &&(
-        <Section title="📤 AP Flows" sflows={apFlows} />
-      )}
-
-      {activeTab!=="ap"&&(
-        <div style={{background:"#fb923c10",border:"1px solid #fb923c30",borderRadius:8,
-          padding:"8px 10px",marginTop:4}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#fb923c",marginBottom:5}}>
+      {(activeTab==="ar" || activeTab==="all") && arF.length>0 && <Sec title="💰 AR Flows" sflows={arF}/>}
+      {(activeTab==="ap" || activeTab==="all") && apF.length>0 && <Sec title="📤 AP Flows" sflows={apF}/>}
+      {activeTab !== "ap" && (
+        <div style={{ background:"#fb923c0d", border:"1px solid #fb923c28", borderRadius:8,
+          padding:"7px 10px", marginTop:4 }}>
+          <div style={{ fontSize:10, fontWeight:700, color:"#fb923c", marginBottom:3 }}>
             ⚡ {NODES.psa?.label} ↔ Payment Provider
           </div>
-          <div style={{fontSize:11,color:"#94a3b8",lineHeight:1.5}}>
+          <div style={{ fontSize:11, color:"#94a3b8", lineHeight:1.5 }}>
             {persona==="msp"
-              ?"PSA connects directly to the payment provider — auto-bills recurring contracts and receives payment confirmations to close tickets."
-              :"PM tool connects directly to the payment provider — triggers client payment requests and receives confirmations to close engagement milestones."}
+              ? "PSA connects directly to the payment provider — auto-bills recurring contracts and receives payment confirmations to close tickets without manual reconciliation."
+              : "PM tool connects directly to the payment provider — triggers client payment requests and receives confirmations to close engagement milestones."}
           </div>
         </div>
       )}
@@ -600,68 +586,66 @@ function FlowPanel({ flows, activeTab, hiddenFlows, toggleFlow, onHover, persona
   );
 }
 
-// ─── NODE DETAIL ─────────────────────────────────────────────────────────────
-
+// ─── NODE DETAIL ──────────────────────────────────────────────────────────────
 function NodeDetail({ node, flows, onClose, NODES }) {
-  const arFlows=flows.filter(f=>f.type==="ar"&&(f.from===node.id||f.to===node.id));
-  const apFlows=flows.filter(f=>f.type==="ap"&&(f.from===node.id||f.to===node.id));
-  return(
+  const arF = flows.filter(f => f.type==="ar" && (f.from===node.id || f.to===node.id));
+  const apF = flows.filter(f => f.type==="ap" && (f.from===node.id || f.to===node.id));
+  return (
     <div>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
-        <span style={{fontSize:25}}>{node.icon}</span>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+        <span style={{ fontSize:24 }}>{node.icon}</span>
         <div>
-          <div style={{fontWeight:700,fontSize:14,color:node.color}}>{node.label}</div>
-          <div style={{fontSize:11,color:"#64748b"}}>{node.role}</div>
+          <div style={{ fontWeight:700, fontSize:14, color:node.color }}>{node.label}</div>
+          <div style={{ fontSize:11, color:"#64748b" }}>{node.role}</div>
         </div>
-        <button onClick={onClose} style={{marginLeft:"auto",background:"none",border:"none",
-          color:"#64748b",cursor:"pointer",fontSize:20,lineHeight:1}}>×</button>
+        <button onClick={onClose} style={{ marginLeft:"auto", background:"none", border:"none",
+          color:"#64748b", cursor:"pointer", fontSize:20, lineHeight:1 }}>×</button>
       </div>
-      <p style={{fontSize:12,color:"#94a3b8",lineHeight:1.65,marginBottom:14}}>{node.desc}</p>
-      {node.paymentNote&&(
-        <div style={{background:"#fb923c14",border:"1px solid #fb923c40",borderRadius:8,
-          padding:"8px 10px",marginBottom:14}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#fb923c",marginBottom:4}}>💳 Payment Provider Connection</div>
-          <div style={{fontSize:11,color:"#94a3b8",lineHeight:1.5}}>{node.paymentNote}</div>
+      <p style={{ fontSize:12, color:"#94a3b8", lineHeight:1.65, marginBottom:12 }}>{node.desc}</p>
+      {node.paymentNote && (
+        <div style={{ background:"#fb923c10", border:"1px solid #fb923c35", borderRadius:8,
+          padding:"7px 9px", marginBottom:12 }}>
+          <div style={{ fontSize:10, fontWeight:700, color:"#fb923c", marginBottom:3 }}>💳 Payment Connection</div>
+          <div style={{ fontSize:11, color:"#94a3b8", lineHeight:1.5 }}>{node.paymentNote}</div>
         </div>
       )}
-      <div style={{marginBottom:14}}>
-        <div style={{fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",
-          letterSpacing:1,marginBottom:7}}>Common Tools</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-          {node.tools.map(t=>(
-            <span key={t} style={{background:`${node.color}18`,border:`1px solid ${node.color}44`,
-              color:node.color,borderRadius:12,padding:"2px 9px",fontSize:11,fontWeight:600}}>{t}</span>
+      <div style={{ marginBottom:12 }}>
+        <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+          letterSpacing:1, marginBottom:6 }}>Common Tools</div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+          {node.tools.map(t => (
+            <span key={t} style={{ background:`${node.color}18`, border:`1px solid ${node.color}44`,
+              color:node.color, borderRadius:12, padding:"2px 9px", fontSize:11, fontWeight:600 }}>{t}</span>
           ))}
         </div>
       </div>
-      {arFlows.length>0&&<FlowSection title="AR Connections" flows={arFlows} nodeId={node.id} NODES={NODES}/>}
-      {apFlows.length>0&&<FlowSection title="AP Connections" flows={apFlows} nodeId={node.id} NODES={NODES}/>}
+      {arF.length>0 && <ConnSec title="AR Connections" flows={arF} nodeId={node.id} NODES={NODES}/>}
+      {apF.length>0 && <ConnSec title="AP Connections" flows={apF} nodeId={node.id} NODES={NODES}/>}
     </div>
   );
 }
 
-function FlowSection({ title, flows, nodeId, NODES }) {
-  return(
-    <div style={{marginBottom:12}}>
-      <div style={{fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",
-        letterSpacing:1,marginBottom:7}}>{title}</div>
-      {flows.map(f=>(
-        <div key={f.id} style={{background:"#1e293b",borderRadius:7,padding:"7px 9px",
-          marginBottom:5,borderLeft:`3px solid ${f.color}`}}>
-          <div style={{fontSize:11,fontWeight:600,color:"#e2e8f0",marginBottom:3}}>
-            {f.from===nodeId?`→ ${NODES[f.to]?.label}`:`← ${NODES[f.from]?.label}`}
-            <span style={{marginLeft:6,fontSize:10,color:f.color,
-              background:`${f.color}22`,borderRadius:8,padding:"1px 6px"}}>{f.label}</span>
+function ConnSec({ title, flows, nodeId, NODES }) {
+  return (
+    <div style={{ marginBottom:10 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:"#475569", textTransform:"uppercase",
+        letterSpacing:1, marginBottom:6 }}>{title}</div>
+      {flows.map(f => (
+        <div key={f.id} style={{ background:"#1e293b", borderRadius:7, padding:"6px 8px",
+          marginBottom:4, borderLeft:`3px solid ${f.color}` }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"#e2e8f0", marginBottom:2 }}>
+            {f.from===nodeId ? `→ ${NODES[f.to]?.label}` : `← ${NODES[f.from]?.label}`}
+            <span style={{ marginLeft:6, fontSize:10, color:f.color,
+              background:`${f.color}22`, borderRadius:8, padding:"1px 6px" }}>{f.label}</span>
           </div>
-          <div style={{fontSize:10,color:"#64748b",lineHeight:1.5}}>{f.detail}</div>
+          <div style={{ fontSize:10, color:"#64748b", lineHeight:1.4 }}>{f.detail}</div>
         </div>
       ))}
     </div>
   );
 }
 
-// ─── RENDER ──────────────────────────────────────────────────────────────────
-const root=ReactDOM.createRoot(document.getElementById("root"));
+const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App/>);
 </script>
 </body>
